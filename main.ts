@@ -10,7 +10,7 @@
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 // Serve the site locally with `node serve.ts`, then open http://localhost:8080.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-frontend.ts';
@@ -18,8 +18,32 @@ import { buildDossier } from './vendor/makefun-frontend.ts';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
+// Fail fast with a readable error instead of handing in a broken entry:
+// the site must have its index page, and screenshots/ may hold at most the
+// four images the scorer allows.
+if (!existsSync(join(here, 'app', 'index.html'))) {
+  throw new Error('app/index.html is missing — nothing to hand in');
+}
+if (existsSync(join(here, 'screenshots'))) {
+  const shots = readdirSync(join(here, 'screenshots')).filter(
+    (name) => !name.startsWith('.') && statSync(join(here, 'screenshots', name)).isFile(),
+  );
+  if (shots.length === 0 || shots.length > 4) {
+    throw new Error(`screenshots/ must hold 1-4 images, found ${shots.length}`);
+  }
+}
+
+// Clear the previous run's output first, so a file deleted from app/ or
+// screenshots/ since the last run cannot leak into this hand-in and the two
+// grader runs write the same bytes.
+rmSync(join(out, 'app'), { recursive: true, force: true });
+rmSync(join(out, 'screenshots'), { recursive: true, force: true });
+rmSync(join(out, 'dossier.json'), { force: true });
+
 mkdirSync(out, { recursive: true });
-cpSync(join(here, 'app'), join(out, 'app'), { recursive: true });
+// dereference: a symlink inside app/ would fail the scorer's app_files
+// check, so copy what it points at instead of the link itself.
+cpSync(join(here, 'app'), join(out, 'app'), { recursive: true, dereference: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) {
   cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
@@ -36,4 +60,11 @@ writeFileSync(
     app_max_files: 993,
     app_max_bytes: 16777216,
   }),
+);
+
+// One line of proof the hand-in worked: the dossier's byte size and the
+// number of entries copied, so a broken run is obvious at a glance.
+const appEntries = readdirSync(join(out, 'app'), { recursive: true }).length;
+console.log(
+  `handed in ${appEntries} app entries, dossier ${statSync(join(out, 'dossier.json')).size} bytes -> ${out}`,
 );
